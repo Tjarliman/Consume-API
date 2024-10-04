@@ -1,0 +1,131 @@
+*&---------------------------------------------------------------------*
+*& Report  ZIMM_GOODMVMNT_OUTBOUND
+*&
+*&---------------------------------------------------------------------*
+*&
+*&
+*&---------------------------------------------------------------------*
+REPORT zimm_goodmvmnt_outbound NO STANDARD PAGE HEADING.
+
+*--------------------------------------------------------------------*
+* data definition
+*--------------------------------------------------------------------*
+TABLES: mkpf, mseg.
+CONSTANTS: c_intfid TYPE zde_intfid VALUE '001'.
+*--------------------------------------------------------------------*
+* selection screen
+*--------------------------------------------------------------------*
+SELECTION-SCREEN BEGIN OF BLOCK a WITH FRAME TITLE text-001.
+SELECT-OPTIONS:
+  s_mblnr FOR mkpf-mblnr.
+
+PARAMETERS:
+  p_mjahr TYPE mkpf-mjahr.
+SELECTION-SCREEN END OF BLOCK a.
+
+*--------------------------------------------------------------------*
+* events
+*--------------------------------------------------------------------*
+START-OF-SELECTION.
+*  PERFORM f_initialize.
+  PERFORM f_get_data.
+*  PERFORM f_send_data.
+*&---------------------------------------------------------------------*
+*&      Form  F_GET_DATA
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+*  -->  p1        text
+*  <--  p2        text
+*----------------------------------------------------------------------*
+FORM f_get_data .
+  DATA:
+    ls_header TYPE bapi2017_gm_head_02,
+    lt_items  TYPE ztt_goodsmvt_items,
+    lt_return TYPE bapiret2_t.
+
+  SELECT mblnr, mjahr
+    FROM mkpf
+    WHERE mblnr IN @s_mblnr
+    AND   mjahr = @p_mjahr
+    ORDER BY mblnr, mjahr
+    INTO TABLE @DATA(lt_mkpf).
+
+  LOOP AT lt_mkpf INTO DATA(ls_mkpf).
+    CALL FUNCTION 'BAPI_GOODSMVT_GETDETAIL'
+      EXPORTING
+        materialdocument = ls_mkpf-mblnr
+        matdocumentyear  = ls_mkpf-mjahr
+      IMPORTING
+        goodsmvt_header  = ls_header
+      TABLES
+        goodsmvt_items   = lt_items
+        return           = lt_return.
+
+    IF line_exists( lt_return[ type = 'E' ] ).
+      CONTINUE.
+    ENDIF.
+
+    LOOP AT lt_items INTO DATA(ls_item).
+      DATA(ls_data) = VALUE zsmm_goodsmvmn_json(
+        spknumber = |{ ls_header-mat_doc }{ ls_header-doc_year }{ ls_item-matdoc_itm }|
+        plant = ls_item-plant
+        activity =  ls_item-move_type
+        storageloc = ls_item-stge_loc
+        documentdate =  ls_header-doc_date
+        documenttime = ls_header-entry_time
+        materialnumber = |{ ls_item-material ALPHA = OUT }|
+        quantity = ls_item-entry_qnt
+        uom =  ls_item-entry_uom
+        description = ls_header-header_txt
+        username = ls_header-username
+        ponumber = ls_item-po_number
+        polineitem = ls_item-po_item
+       ).
+
+      " Convert internal table to JSON
+      CALL METHOD /ui2/cl_json=>serialize
+        EXPORTING
+          data        = ls_data
+          pretty_name = abap_true
+        RECEIVING
+          r_json      = DATA(lv_json).
+
+      CALL METHOD zcl_interface_outbound=>interface_outbound
+        EXPORTING
+          i_intfid   = c_intfid
+          i_json     = lv_json
+        IMPORTING
+          e_response = DATA(ls_response).
+
+      WRITE:/(20) 'Material document: ', (10) |{ ls_header-mat_doc }-{ ls_header-doc_year }|.
+      IF ls_response-errorcode IS INITIAL.
+        WRITE:(15) 'transfered'.
+      ELSE.
+        WRITE:(75) |Error: { ls_response-errormessage }|.
+      ENDIF.
+    ENDLOOP.
+  ENDLOOP.
+ENDFORM.
+*&---------------------------------------------------------------------*
+*&      Form  F_INITIALIZE
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+*  -->  p1        text
+*  <--  p2        text
+*----------------------------------------------------------------------*
+FORM f_initialize .
+
+ENDFORM.
+*&---------------------------------------------------------------------*
+*&      Form  F_SEND_DATA
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+*  -->  p1        text
+*  <--  p2        text
+*----------------------------------------------------------------------*
+FORM f_send_data .
+
+ENDFORM.
