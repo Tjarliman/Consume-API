@@ -1,0 +1,121 @@
+class ZCL_INTERFACE_OUTBOUND definition
+  public
+  final
+  create public .
+
+public section.
+
+  class-methods INTERFACE_OUTBOUND
+    importing
+      !I_INTFID type ZDE_INTFID
+      !I_JSON type ZDE_JSON
+    exporting
+      !E_RESPONSE type ZSAB_OUTAPI .
+protected section.
+private section.
+ENDCLASS.
+
+
+
+CLASS ZCL_INTERFACE_OUTBOUND IMPLEMENTATION.
+
+
+* <SIGNATURE>---------------------------------------------------------------------------------------+
+* | Static Public Method ZCL_INTERFACE_OUTBOUND=>INTERFACE_OUTBOUND
+* +-------------------------------------------------------------------------------------------------+
+* | [--->] I_INTFID                       TYPE        ZDE_INTFID
+* | [--->] I_JSON                         TYPE        ZDE_JSON
+* | [<---] E_RESPONSE                     TYPE        ZSAB_OUTAPI
+* +--------------------------------------------------------------------------------------</SIGNATURE>
+  METHOD interface_outbound.
+    DATA:
+      ls_intf        TYPE ztba_intf,
+      lo_http_client TYPE REF TO if_http_client,
+      lv_url         TYPE string,
+      lv_response    TYPE string.
+
+    SELECT * FROM ztba_intf
+      WHERE intfid = @i_intfid
+      INTO @ls_intf
+      UP TO 1 ROWS.
+    ENDSELECT.
+
+    IF sy-subrc <> 0.
+      e_response = VALUE #(
+        errorcode = 'I01'
+        errormessage = 'Interface ID not yet maintained'
+      ).
+      EXIT.
+    ENDIF.
+
+
+    " URL of the API endpoint
+    lv_url = ls_intf-intfurl. "'https://api.example.com/endpoint'.
+
+    " Create HTTP client
+    TRANSLATE lv_url TO LOWER CASE.
+    CALL METHOD cl_http_client=>create_by_url
+      EXPORTING
+        url    = lv_url
+      IMPORTING
+        client = lo_http_client
+      EXCEPTIONS
+        OTHERS = 1.
+
+    IF sy-subrc <> 0.
+      e_response = VALUE #(
+        errorcode = 'I02'
+        errormessage = 'Unable to connect to the URL'
+      ).
+      EXIT.
+    ENDIF.
+
+    " Set request method and headers
+    lo_http_client->request->set_header_field( name = 'Content-Type' value = 'application/json' ).
+    lo_http_client->request->set_method( 'POST' ).
+
+    " Set the JSON payload
+    lo_http_client->request->set_cdata( i_json ).
+
+    " Send the request
+    CALL METHOD lo_http_client->send
+      EXCEPTIONS
+        http_communication_failure = 1
+        http_invalid_state         = 2
+        http_processing_failed     = 3
+        http_invalid_timeout       = 4.
+
+    DATA lv_ret_code TYPE i.
+    DATA lv_reason TYPE string.
+
+    lo_http_client->receive(
+         EXCEPTIONS
+         http_communication_failure = 1
+         http_invalid_state = 2
+         http_processing_failed = 3 ).
+
+    lo_http_client->response->get_status(
+          IMPORTING
+            code   = lv_ret_code           " HTTP Status Code
+            reason = lv_reason ).
+
+    " Get the response
+    CALL METHOD lo_http_client->response->get_cdata( RECEIVING data = lv_response ).
+
+    IF lv_ret_code >= 200 AND lv_ret_code  < 300.
+      e_response = VALUE #(
+              errorcode = lv_ret_code
+              errormessage = lv_response
+            ).
+    ELSE.
+      e_response = VALUE #(
+              errorcode = space
+              errormessage = 'Successfull'
+            ).
+    ENDIF.
+
+    " Clean up
+    CALL METHOD lo_http_client->close.
+
+  ENDMETHOD.
+ENDCLASS.
